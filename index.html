@@ -1,0 +1,854 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code 세션 뷰어</title>
+<style>
+  :root {
+    --bg:#1a1b1e; --bg2:#212327; --bg3:#2a2c31; --line:#34373d;
+    --fg:#e6e7e9; --muted:#9a9ea6; --accent:#d0a373; --accent2:#7aa2f7;
+    --user:#2d3340; --tool:#26312b; --think:#332b3a; --err:#3a2727;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--fg); display:flex; flex-direction:column; }
+  header { padding:8px 14px; background:var(--bg2); border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:12px; flex:0 0 auto; }
+  header h1 { font-size:14px; margin:0; font-weight:600; color:var(--accent); }
+  header .root { color:var(--muted); font-size:12px; }
+  header .grow { flex:1; }
+  #globalSearch { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+                  border-radius:6px; padding:5px 9px; width:260px; }
+  #settingsBtn { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+                 border-radius:6px; padding:5px 11px; cursor:pointer; font-size:13px; }
+  #settingsBtn:hover { background:#33363c; border-color:var(--accent); }
+  /* 날짜(기간) 필터 */
+  .dfwrap { position:relative; }
+  #dateBtn { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+             border-radius:6px; padding:5px 11px; cursor:pointer; font-size:13px; white-space:nowrap; }
+  #dateBtn:hover { background:#33363c; border-color:var(--accent); }
+  #dateBtn.active { color:var(--accent); border-color:var(--accent); }
+  #datePop { position:absolute; top:calc(100% + 6px); right:0; background:var(--bg2);
+             border:1px solid var(--line); border-radius:8px; padding:8px 10px; z-index:30;
+             display:none; min-width:180px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #datePop.open { display:block; }
+  #datePop .fp-h { color:var(--muted); font-size:11px; margin-bottom:6px; }
+  #dpCustom { display:none; margin-top:6px; padding-top:6px; border-top:1px solid var(--line);
+              font-size:12px; color:var(--muted); }
+  #dpCustom.show { display:block; }
+  #dpCustom input[type=date] { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+              border-radius:5px; padding:3px 5px; font-size:12px; }
+  /* 설정 드로어 */
+  #drawerOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:40;
+                   opacity:0; pointer-events:none; transition:opacity .15s; }
+  #drawerOverlay.show { opacity:1; pointer-events:auto; }
+  #settingsDrawer { position:fixed; top:0; right:0; height:100%; width:380px; max-width:90vw;
+                    background:var(--bg2); border-left:1px solid var(--line); z-index:41;
+                    transform:translateX(100%); transition:transform .18s ease; display:flex; flex-direction:column; }
+  #settingsDrawer.open { transform:translateX(0); }
+  #settingsDrawer .dhead { padding:12px 16px; border-bottom:1px solid var(--line); position:relative; }
+  #settingsDrawer .dhead b { color:var(--accent); }
+  #settingsDrawer .dpath { color:var(--muted); font-size:11px; margin-top:3px; word-break:break-all; }
+  #drawerClose { position:absolute; top:10px; right:14px; cursor:pointer; color:var(--muted); font-size:16px; }
+  #drawerClose:hover { color:var(--fg); }
+  #settingsBody { overflow:auto; padding:10px 16px 20px; }
+  .snote { color:var(--muted); font-size:11.5px; line-height:1.5; margin-bottom:10px; }
+  .sgrp { margin-bottom:14px; }
+  .sgrp-h { color:var(--muted); font-size:11px; text-transform:none; margin:8px 0 5px;
+            border-bottom:1px solid var(--line); padding-bottom:3px; }
+  .schk { display:flex; align-items:center; gap:8px; padding:5px 4px; cursor:pointer; border-radius:5px; }
+  .schk:hover { background:var(--bg3); }
+  .schk input { width:15px; height:15px; cursor:pointer; }
+  .schk .sname { font-size:13px; word-break:break-all; }
+  .schk .sabsent { font-size:10px; color:var(--accent); border:1px solid var(--accent);
+                   border-radius:4px; padding:0 4px; margin-left:6px; opacity:.8; }
+  .sro { display:flex; justify-content:space-between; gap:10px; padding:4px; color:var(--muted); font-size:12.5px; }
+  .sro .sval { color:var(--fg); opacity:.7; }
+  .seffort select { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+                    border-radius:6px; padding:5px 9px; font-size:13px; width:100%; }
+  .sstatus { font-size:12px; min-height:18px; margin-top:8px; }
+  .sstatus.ok { color:#8fd18f; } .sstatus.err { color:#e88; }
+  .main { flex:1; display:flex; min-height:0; }
+  .pane { overflow:auto; height:100%; }
+  #tree { flex:0 0 280px; padding:6px 0; }
+  #list { flex:0 0 320px; }
+  #detail { flex:1 1 0; min-width:0; padding:0; }
+  .splitter { flex:0 0 6px; cursor:col-resize; background:var(--line); }
+  .splitter:hover, .splitter.drag { background:var(--accent); }
+  body.resizing { cursor:col-resize; user-select:none; }
+  /* tree */
+  .node { user-select:none; }
+  .node .row { display:flex; align-items:center; gap:4px; padding:3px 8px; cursor:pointer;
+               white-space:nowrap; border-radius:4px; margin:0 4px; }
+  .node .row:hover { background:var(--bg3); }
+  .node .row.sel { background:#3a3320; }
+  .tw { width:12px; display:inline-block; color:var(--muted); font-size:10px; }
+  .nlabel { overflow:hidden; text-overflow:ellipsis; }
+  .ncount { color:var(--muted); font-size:11px; margin-left:auto; padding-left:8px; }
+  .children { display:none; }
+  .node.open > .children { display:block; }
+  /* list */
+  .bhead { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:6px;
+           padding:6px 10px; background:var(--bg3); border-bottom:1px solid var(--line);
+           cursor:pointer; font-size:12px; white-space:nowrap; }
+  .bhead:hover { background:#33363c; }
+  .bhead .bname { color:var(--accent); font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+  .bhead .bcount { margin-left:auto; color:var(--muted); background:var(--bg2);
+                   border-radius:4px; padding:0 6px; }
+  .bgroup:not(.open) .bbody { display:none; }
+  .sess { padding:9px 12px; border-bottom:1px solid var(--line); cursor:pointer; }
+  .sess.forked { border-left:2px solid var(--accent2); background:rgba(122,162,247,.04); }
+  .forktag { color:var(--accent2); font-size:11px; font-weight:600; }
+  .sess:hover { background:var(--bg2); }
+  .sess.sel { background:#2b2d33; border-left:3px solid var(--accent); padding-left:9px; }
+  .sess .t { font-weight:600; margin-bottom:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sess .sub { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sess .meta { color:var(--muted); font-size:11px; margin-top:4px; display:flex; gap:8px; flex-wrap:wrap; }
+  .badge { background:var(--bg3); border-radius:4px; padding:0 5px; }
+  .hits { color:var(--accent); }
+  /* detail */
+  #detailBar { position:sticky; top:0; background:var(--bg2); border-bottom:1px solid var(--line);
+               padding:8px 14px; display:flex; gap:10px; align-items:center; z-index:5; }
+  #detailBar .ttl { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:0 1 auto; }
+  #inSearch { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+              border-radius:6px; padding:4px 8px; width:180px; }
+  .srchbox { display:inline-flex; align-items:center; gap:2px; }
+  .navbtn { cursor:pointer; color:var(--muted); padding:0 5px; user-select:none; font-size:16px; line-height:1; }
+  .navbtn:hover { color:var(--accent); }
+  #inCount { color:var(--muted); font-size:12px; min-width:50px; text-align:center; }
+  /* 표시 필터: 요약 카드 아래, 스크롤해도 떠 있는 플로팅 버튼 */
+  #filterFloat { position:sticky; top:44px; z-index:7; display:flex; justify-content:flex-end;
+                 padding:4px 18px 0; pointer-events:none; }
+  .filterwrap { position:relative; pointer-events:auto; }
+  #filterBtn { background:var(--bg3); border:1px solid var(--line); color:var(--fg);
+               border-radius:6px; padding:4px 10px; cursor:pointer; font-size:12px;
+               box-shadow:0 2px 8px rgba(0,0,0,.35); }
+  #filterBtn:hover { border-color:var(--accent); }
+  #filterPop { position:absolute; top:calc(100% + 4px); right:0; background:var(--bg2);
+               border:1px solid var(--line); border-radius:8px; padding:8px 10px; z-index:8;
+               display:none; min-width:190px; box-shadow:0 6px 20px rgba(0,0,0,.45); }
+  #filterPop.open { display:block; }
+  #filterPop .fp-h { color:var(--muted); font-size:11px; margin-bottom:6px; }
+  .fchk { display:flex; align-items:center; gap:8px; padding:4px; font-size:13px; cursor:pointer; border-radius:5px; }
+  .fchk:hover { background:var(--bg3); }
+  .fchk input { width:15px; height:15px; cursor:pointer; }
+  /* 표시 필터 — 숨김 클래스 */
+  .hide-user .role-user, .hide-asst .role-asst, .hide-tool .role-tool,
+  .hide-meta .role-meta, .hide-thinking .think, .hide-tooluse .tool { display:none; }
+  #sumCard { position:relative; margin:12px 18px 4px; background:var(--bg2); border:1px solid var(--line);
+             border-radius:8px; padding:10px 14px 14px; font-size:12.5px; }
+  .srow { display:flex; gap:10px; padding:3px 0; align-items:baseline; }
+  .srow .sk { flex:0 0 52px; color:var(--muted); }
+  .srow .sv { flex:1; min-width:0; }
+  .srow .sv.goal { color:var(--fg); }
+  .srow .dim { color:var(--muted); }
+  .srow .tools .tc { color:var(--accent); font-size:11px; margin-left:2px; }
+  .srow .tools { color:var(--fg); }
+  .plink { color:var(--accent2); cursor:pointer; text-decoration:underline; }
+  .srow .sid { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--fg); }
+  .minibtn { background:var(--bg3); border:1px solid var(--line); color:var(--fg); border-radius:5px;
+             padding:1px 8px; cursor:pointer; font-size:11.5px; margin-left:6px; vertical-align:middle; }
+  .minibtn:hover { border-color:var(--accent); }
+  .minibtn.resume { color:var(--accent); border-color:#4a4130; }
+  .minibtn.resume:hover { background:#33363c; border-color:var(--accent); }
+  #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px);
+           background:var(--bg3); border:1px solid var(--line); color:var(--fg); border-radius:8px;
+           padding:9px 16px; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.5); z-index:60;
+           opacity:0; pointer-events:none; transition:opacity .18s, transform .18s; max-width:80vw; }
+  #toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  #toast.err { border-color:#5a3030; }
+  #detailBody { padding:14px 18px; }
+  .msg { margin:0 0 16px; max-width:920px; }
+  .msg .head { font-size:11px; color:var(--muted); margin-bottom:4px; display:flex; gap:8px; }
+  .role-user .bubble { background:var(--user); }
+  .role-user .head b { color:#cdd6e6; }
+  /* 도구 결과: 말풍선 없이 결과 박스만 — 사용자 입력과 시각적으로 구분 */
+  .role-tool { margin-left:14px; }
+  .role-tool .bubble { background:transparent; border:none; padding:0; }
+  .role-tool .head b { color:var(--muted); font-weight:600; }
+  /* 메타(주입) 메시지: 흐리게 + 기본 접힘 */
+  .role-meta { opacity:.78; }
+  .role-meta .head b { color:var(--muted); font-weight:600; }
+  .role-meta > details > summary { cursor:pointer; color:var(--muted); font-size:12px;
+    background:var(--bg2); border:1px dashed var(--line); border-radius:6px; padding:6px 10px; }
+  .role-meta > details[open] > summary { margin-bottom:6px; }
+  .bubble { background:var(--bg2); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .blk { margin:0 0 10px; } .blk:last-child { margin-bottom:0; }
+  .blk.text { white-space:pre-wrap; word-break:break-word; }
+  pre { background:#15161a; border:1px solid var(--line); border-radius:6px; padding:10px;
+        overflow:auto; margin:8px 0; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+  .blk.text code.inline { background:#15161a; padding:1px 4px; border-radius:3px; }
+  .tool { background:var(--tool); border:1px solid #2f4034; border-radius:6px; padding:8px 10px; }
+  .tool .tname { color:var(--accent); font-weight:600; font-family:ui-monospace,monospace; font-size:12.5px; }
+  .tool pre, .toolres pre { margin:6px 0 0; }
+  .toolres { background:var(--bg3); border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+  .toolres.err { background:var(--err); border-color:#5a3030; }
+  .toolres.clamped pre { max-height:260px; overflow:hidden; }
+  .toolres.clamped.expanded pre { max-height:none; }
+  details.think > summary, details.sys > summary { cursor:pointer; color:var(--muted); font-size:12px; }
+  details.think { background:var(--think); border:1px solid #43374b; border-radius:6px; padding:6px 10px; }
+  .more { color:var(--accent2); cursor:pointer; font-size:12px; }
+  mark { background:#5a4d1e; color:#fff; border-radius:2px; }
+  mark.cur { background:#d0732e; color:#fff; box-shadow:0 0 0 2px rgba(208,115,46,.4); }
+  .empty { color:var(--muted); padding:30px; text-align:center; }
+  .spin { color:var(--muted); padding:20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Claude Code 세션 뷰어</h1>
+  <span class="root" id="rootPath"></span>
+  <span class="grow"></span>
+  <input id="globalSearch" placeholder="전체 세션 검색 (Enter)">
+  <span class="dfwrap">
+    <button id="dateBtn" title="활동 기간으로 목록 필터">기간 ▾</button>
+    <div id="datePop">
+      <div class="fp-h">활동 기간 (마지막 활동 기준)</div>
+      <label class="fchk"><input type="radio" name="dp" value="all" checked><span>전체</span></label>
+      <label class="fchk"><input type="radio" name="dp" value="today"><span>오늘</span></label>
+      <label class="fchk"><input type="radio" name="dp" value="7"><span>최근 7일</span></label>
+      <label class="fchk"><input type="radio" name="dp" value="30"><span>최근 30일</span></label>
+      <label class="fchk"><input type="radio" name="dp" value="custom"><span>직접 입력</span></label>
+      <div id="dpCustom"><input type="date" id="dpFrom"> ~ <input type="date" id="dpTo"></div>
+    </div>
+  </span>
+  <button id="settingsBtn" title="Claude Code 설정">⚙ 설정</button>
+</header>
+<div class="main">
+  <div class="pane" id="tree"></div>
+  <div class="splitter" data-target="tree"></div>
+  <div class="pane" id="list"><div class="empty">왼쪽에서 디렉토리를 선택하세요</div></div>
+  <div class="splitter" data-target="list"></div>
+  <div class="pane" id="detail"><div class="empty">세션을 선택하세요</div></div>
+</div>
+<div id="drawerOverlay"></div>
+<aside id="settingsDrawer" aria-hidden="true">
+  <div class="dhead">
+    <b>Claude Code 설정</b>
+    <span id="drawerClose" title="닫기 (Esc)">✕</span>
+    <div class="dpath" id="settingsPath"></div>
+  </div>
+  <div id="settingsBody"></div>
+</aside>
+<div id="toast"></div>
+<script>
+const $ = s => document.querySelector(s);
+let SESSIONS = [];          // 전체 메타
+let curList = [];           // 현재 목록(필터·정렬 적용본)
+let curListRaw = [];        // 목록 원본(트리 선택 또는 검색 결과) — 필터 재적용용
+let curListTitle = "";
+let curFile = null;
+
+// ---------- 날짜(기간) 필터 — 마지막 활동(lastTs) 기준, 목록에만 적용, localStorage 저장 ----------
+function loadDateFilter(){
+  try{ const r=JSON.parse(localStorage.getItem("ccsv-daterange")||"null");
+    if(r && r.mode) return {mode:r.mode, from:r.from||null, to:r.to||null}; }catch(e){}
+  return {mode:"all", from:null, to:null};
+}
+let dateFilter = loadDateFilter();
+function saveDateFilter(){ localStorage.setItem("ccsv-daterange", JSON.stringify(dateFilter)); }
+// 현재 필터를 [from, to] Date 범위로 환산(상대 프리셋은 호출 시점 기준). 없으면 null.
+function getDateRange(){
+  const f=dateFilter;
+  if(f.mode==="all") return {from:null, to:null};
+  if(f.mode==="custom") return {
+    from: f.from ? new Date(f.from+"T00:00:00") : null,
+    to:   f.to   ? new Date(f.to+"T23:59:59.999") : null };
+  const now=new Date();
+  if(f.mode==="today"){ const d=new Date(now); d.setHours(0,0,0,0); return {from:d, to:null}; }
+  const days = f.mode==="30" ? 30 : 7;
+  return {from: new Date(now.getTime()-days*86400000), to:null};
+}
+function dateFilterActive(){ const {from,to}=getDateRange(); return !!(from||to); }
+// 현재 기간 필터를 세션 판별 함수로. 필터가 없으면 null(=전부 통과).
+function makeDatePredicate(){
+  const {from,to}=getDateRange();
+  if(!from && !to) return null;
+  return s=>{
+    if(!s.lastTs) return false;
+    const t=new Date(s.lastTs); if(isNaN(t)) return false;
+    if(from && t<from) return false;
+    if(to && t>to) return false;
+    return true;
+  };
+}
+function applyDateFilter(sessions){
+  const pred=makeDatePredicate();
+  return pred ? sessions.filter(pred) : sessions;
+}
+// 트리 노드(하위 포함)에서 기간 필터를 통과하는 세션 수
+function nodeFilteredCount(node, pred){
+  let c = pred ? node.sessions.filter(pred).length : node.sessions.length;
+  for(const k in node.children) c += nodeFilteredCount(node.children[k], pred);
+  return c;
+}
+function dateBtnLabel(){
+  const m=dateFilter.mode;
+  if(m==="today") return "기간: 오늘 ▾";
+  if(m==="7")     return "기간: 7일 ▾";
+  if(m==="30")    return "기간: 30일 ▾";
+  if(m==="custom" && dateFilterActive()) return `기간: ${dateFilter.from||"…"}~${dateFilter.to||"…"} ▾`;
+  return "기간 ▾";
+}
+function updateDateBtn(){ const b=$("#dateBtn"); if(!b) return;
+  b.textContent=dateBtnLabel(); b.classList.toggle("active", dateFilterActive()); }
+function rerenderList(){ if(curListRaw.length || curListTitle) showList(curListRaw, curListTitle); }
+// 필터 변경 시: 저장 → 버튼 → 좌측 트리 카운트 갱신 → 가운데 목록 재적용
+function onFilterChanged(){ saveDateFilter(); updateDateBtn(); renderTree(false); rerenderList(); }
+function setupDatePopover(){
+  const btn=$("#dateBtn"), pop=$("#datePop"); if(!btn||!pop) return;
+  // 저장된 필터를 컨트롤에 반영
+  pop.querySelectorAll('input[name=dp]').forEach(r=>{ r.checked=(r.value===dateFilter.mode); });
+  $("#dpFrom").value=dateFilter.from||""; $("#dpTo").value=dateFilter.to||"";
+  $("#dpCustom").classList.toggle("show", dateFilter.mode==="custom");
+  updateDateBtn();
+  btn.onclick=e=>{ e.stopPropagation(); pop.classList.toggle("open"); };
+  pop.querySelectorAll('input[name=dp]').forEach(r=>{
+    r.onchange=()=>{ dateFilter.mode=r.value;
+      $("#dpCustom").classList.toggle("show", r.value==="custom");
+      onFilterChanged(); };
+  });
+  const onDate=()=>{
+    dateFilter.from=$("#dpFrom").value||null; dateFilter.to=$("#dpTo").value||null;
+    if(dateFilter.mode!=="custom"){ dateFilter.mode="custom";
+      const cr=pop.querySelector('input[value=custom]'); if(cr) cr.checked=true;
+      $("#dpCustom").classList.add("show"); }
+    onFilterChanged();
+  };
+  $("#dpFrom").onchange=onDate; $("#dpTo").onchange=onDate;
+  document.addEventListener("click", e=>{
+    if(pop.classList.contains("open") && !pop.contains(e.target) && e.target!==btn) pop.classList.remove("open");
+  });
+}
+
+function fmtTime(ts){ if(!ts) return ""; const d=new Date(ts); if(isNaN(d)) return "";
+  return d.toLocaleString("ko-KR",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}); }
+function fmtSize(n){ return n>1e6?(n/1e6).toFixed(1)+"M":Math.round(n/1e3)+"K"; }
+function fmtNum(n){ n=n||0; if(n>=1e6) return (n/1e6).toFixed(1)+"M"; if(n>=1e3) return (n/1e3).toFixed(1)+"k"; return ""+n; }
+function fmtDur(a,b){ if(!a||!b) return ""; const ms=new Date(b)-new Date(a); if(isNaN(ms)||ms<0) return "";
+  const m=Math.round(ms/60000); if(m<60) return m+"분"; const h=Math.floor(m/60); return h+"시간 "+(m%60)+"분"; }
+function shortModel(m){ if(!m) return ""; return m.replace("claude-","").replace(/-\d{8}$/,""); }
+function esc(s){ return (s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+let toastTimer=null;
+function toast(msg, isErr){
+  const t=$("#toast"); if(!t) return;
+  t.textContent=msg; t.className = isErr?"show err":"show";
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{ t.className=""; }, 3200);
+}
+async function copyText(text){
+  try{ await navigator.clipboard.writeText(text); return true; }
+  catch(e){
+    // 클립보드 API 실패 시 textarea 폴백
+    try{ const ta=document.createElement("textarea"); ta.value=text;
+      ta.style.position="fixed"; ta.style.opacity="0"; document.body.appendChild(ta);
+      ta.select(); const ok=document.execCommand("copy"); ta.remove(); return ok; }
+    catch(_){ return false; }
+  }
+}
+// resume: 'cd <cwd> && claude -r <id>' 를 클립보드에 복사. 원하는 터미널(cmux 등)에 붙여넣어 실행.
+function shQuote(s){ return "'" + String(s==null?"":s).replace(/'/g, "'\\''") + "'"; }
+async function resumeSession(cwd, sid){
+  const cmd = (cwd ? `cd ${shQuote(cwd)} && ` : "") + `claude -r ${shQuote(sid)}`;
+  if(await copyText(cmd)) toast("resume 명령을 복사했어요 — 터미널에 붙여넣으세요");
+  else toast("복사 실패", true);
+}
+const SYS_RE0 = /^<(ide_opened_file|system-reminder|command-name|command-message|local-command|command-args)/;
+// 세션 요약 카드
+function summaryCard(data){
+  const m=data.meta, s=data.stats||{}, tok=s.tokens||{};
+  // 내용 요약: 첫 사용자 발화(시스템 주입 제외)
+  let goal="";
+  for(const ev of data.events){ if(ev.role!=="user") continue;
+    const tb=ev.blocks.find(b=>b.kind==="text" && !SYS_RE0.test(b.text.trim()));
+    if(tb){ goal=tb.text.trim().replace(/\s+/g," ").slice(0,240); break; } }
+  const tools=Object.entries(s.tools||{}).sort((a,b)=>b[1]-a[1]);
+  const toolStr=tools.slice(0,8).map(([k,v])=>`${esc(k)}<span class="tc">${v}</span>`).join(" ");
+  const fork=data.fork;
+  const rows=[];
+  rows.push(`<div class="srow"><span class="sk">세션ID</span><span class="sv">`+
+    `<code class="sid">${esc(m.uuid)}</code>`+
+    `<button class="minibtn resume" id="resumeBtn" title="resume 명령을 클립보드에 복사">▶ resume</button>`+
+    `</span></div>`);
+  rows.push(`<div class="srow"><span class="sk">기간</span><span class="sv">${fmtTime(s.firstTs||m.firstTs)} ~ ${fmtTime(s.lastTs||m.lastTs)} <span class="dim">(${fmtDur(s.firstTs,s.lastTs)})</span></span></div>`);
+  rows.push(`<div class="srow"><span class="sk">메시지</span><span class="sv">user ${s.user||0} · assistant ${s.assistant||0} <span class="dim">· ${fmtSize(m.size)}</span></span></div>`);
+  rows.push(`<div class="srow"><span class="sk">토큰</span><span class="sv">출력 <b>${fmtNum(tok.output)}</b> · 입력 ${fmtNum(tok.input)} · 캐시읽기 ${fmtNum(tok.cacheRead)} · 캐시생성 ${fmtNum(tok.cacheCreate)}</span></div>`);
+  if((m.models||[]).length) rows.push(`<div class="srow"><span class="sk">모델</span><span class="sv">${esc((m.models||[]).map(shortModel).join(", "))}</span></div>`);
+  if(toolStr) rows.push(`<div class="srow"><span class="sk">도구</span><span class="sv tools">${toolStr}</span></div>`);
+  if(m.gitBranch) rows.push(`<div class="srow"><span class="sk">브랜치</span><span class="sv">🔀 ${esc(m.gitBranch)}</span></div>`);
+  if(fork){ const pt=fork.parentTitle||fork.parentSessionId.slice(0,8);
+    rows.push(`<div class="srow"><span class="sk">분기</span><span class="sv">⑂ 분기점 이후만 표시 · 상속 ${fork.inheritedCount}개 생략 · 원본: `+
+      (fork.parentFile?`<a class="plink" data-pf="${esc(fork.parentFile)}">${esc(pt)}</a>`:esc(pt))+`</span></div>`); }
+  if(goal) rows.push(`<div class="srow"><span class="sk">내용</span><span class="sv goal">${esc(goal)}</span></div>`);
+  return `<div id="sumCard">${rows.join("")}</div>`;
+}
+
+// ---------- 트리 ----------
+function buildTree(sessions){
+  const root = {name:"", path:"", children:{}, sessions:[], count:0};
+  for(const s of sessions){
+    const cwd = s.cwd;
+    if(!cwd){ (root.children["(기타)"] ||= {name:"(기타)",path:"__other__",children:{},sessions:[],count:0});
+              root.children["(기타)"].sessions.push(s); root.children["(기타)"].count++; continue; }
+    const parts = cwd.replace(/\\/g,"/").split("/").filter(Boolean);  // Windows 역슬래시 경로도 분리
+    let node = root, acc="";
+    for(const p of parts){
+      acc += "/"+p;
+      node.children[p] ||= {name:p, path:acc, children:{}, sessions:[], count:0};
+      node = node.children[p];
+    }
+    node.sessions.push(s);
+  }
+  // count = 자기 세션 + 자식 합계
+  (function tally(n){ let c=n.sessions.length; for(const k in n.children) c+=tally(n.children[k]); n.count=c; return c; })(root);
+  return root;
+}
+// 외동 자식 경로 압축 (a/b/c 가 하나뿐이면 한 줄로). pred: 기간 필터(없으면 null=전부)
+// 표시 카운트는 필터 통과분으로, 0건 노드는 숨긴다. 클릭 시엔 필터 전 전체 세션을 넘겨
+// showList 가 다시 필터링하므로 필터를 넓혀도 목록이 올바르게 복원된다.
+function renderNode(node, depth, pred){
+  // compress single-child chains that have no own sessions
+  let label = node.name, cur = node;
+  while(Object.keys(cur.children).length===1 && cur.sessions.length===0){
+    const only = cur.children[Object.keys(cur.children)[0]];
+    label += "/"+only.name; cur = only;
+  }
+  const count = nodeFilteredCount(cur, pred);
+  if(count===0) return null;   // 기간 필터로 0건이면 노드 숨김
+  const kids = Object.values(cur.children)
+    .map(k=>[k, nodeFilteredCount(k, pred)]).filter(([,c])=>c>0)
+    .sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  const el = document.createElement("div"); el.className="node";
+  const row = document.createElement("div"); row.className="row"; row.style.paddingLeft=(6+depth*12)+"px";
+  row.dataset.path = cur.path || "";
+  const hasKids = kids.length>0;
+  row.innerHTML = `<span class="tw">${hasKids?"▶":""}</span>`+
+    `<span class="nlabel">${esc(label||"/")}</span><span class="ncount">${count}</span>`;
+  el.appendChild(row);
+  const childWrap = document.createElement("div"); childWrap.className="children";
+  for(const k of kids){ const ch=renderNode(k, depth+1, pred); if(ch) childWrap.appendChild(ch); }
+  el.appendChild(childWrap);
+  row.onclick = (e)=>{
+    e.stopPropagation();
+    document.querySelectorAll("#tree .row.sel").forEach(r=>r.classList.remove("sel"));
+    row.classList.add("sel");
+    if(hasKids){ el.classList.toggle("open");
+      row.querySelector(".tw").textContent = el.classList.contains("open")?"▼":"▶"; }
+    // 이 노드(하위 포함)의 모든 세션(필터 전) — showList 가 현재 기간 필터를 적용
+    const all=[]; (function collect(n){ all.push(...n.sessions); for(const k in n.children) collect(n.children[k]); })(cur);
+    showList(all, label);
+  };
+  return el;
+}
+// 트리 전체를 (필터 반영해) 렌더. 펼침/선택 상태는 유지. autoOpenFirst 는 초기 로드용.
+let TREE = null;
+function renderTree(autoOpenFirst){
+  const treeBox=$("#tree"); if(!treeBox || !TREE) return;
+  // 스냅샷: 펼쳐진 노드 path 들 + 선택된 path
+  const openPaths=new Set();
+  treeBox.querySelectorAll(".node.open > .row").forEach(r=>{ if(r.dataset.path) openPaths.add(r.dataset.path); });
+  const selEl=treeBox.querySelector(".row.sel"); const selPath=selEl?selEl.dataset.path:null;
+  const pred=makeDatePredicate();
+  treeBox.innerHTML="";
+  const kids=Object.values(TREE.children)
+    .map(k=>[k, nodeFilteredCount(k, pred)]).filter(([,c])=>c>0)
+    .sort((a,b)=>b[1]-a[1]).map(([k])=>k);
+  if(!kids.length){
+    treeBox.innerHTML='<div class="empty">'+(dateFilterActive()?"이 기간에 세션이 없습니다":"세션 없음")+'</div>';
+    return;
+  }
+  for(const k of kids){ const el=renderNode(k, 0, pred); if(el) treeBox.appendChild(el); }
+  // 복원: 펼침 + 선택
+  let restoredSel=false;
+  treeBox.querySelectorAll(".row").forEach(r=>{
+    const p=r.dataset.path;
+    if(p && openPaths.has(p)){ const nd=r.closest(".node");
+      if(nd){ nd.classList.add("open"); const tw=r.querySelector(".tw"); if(tw && tw.textContent) tw.textContent="▼"; } }
+    if(p && selPath && p===selPath){ r.classList.add("sel"); restoredSel=true; }
+  });
+  if(autoOpenFirst && !restoredSel){ const firstRow=treeBox.querySelector(".row"); if(firstRow) firstRow.click(); }
+}
+
+// ---------- 목록 ----------
+function sessEl(s, depth=0, forkMark=null){
+  const d=document.createElement("div"); d.className="sess"; d.dataset.file=s.file;
+  if(depth>0){ d.classList.add("forked"); d.style.paddingLeft=(12+depth*16)+"px"; }
+  const ttl = s.aiTitle || s.lastPrompt || s.uuid;
+  const models = (s.models||[]).map(shortModel).join(", ");
+  const fork = forkMark ? `<span class="forktag" title="${esc(forkMark)}">⑂ 분기</span> ` : "";
+  d.innerHTML = `<div class="t">${fork}${esc(ttl)}</div>`+
+    (s.lastPrompt && s.aiTitle?`<div class="sub">${esc(s.lastPrompt)}</div>`:"")+
+    `<div class="meta"><span>${fmtTime(s.lastTs)}</span>`+
+    `<span class="badge">${s.msgCount}msg</span>`+
+    (models?`<span class="badge">${esc(models)}</span>`:"")+
+    (s.hits?`<span class="hits">검색 ${s.hits}건</span>`:"")+
+    `</div>`+ (s.snippet?`<div class="sub">${esc(s.snippet)}</div>`:"");
+  d.onclick = ()=>openSession(s.file);
+  return d;
+}
+// 분기(/branch) 위계를 부모 밑 들여쓰기로 렌더. byIdAll = 전체 세션 인덱스(부모가 다른 그룹/폴더여도 탐지)
+function renderForest(container, list, byIdAll){
+  const inGroup = new Set(list.map(s=>s.uuid));
+  const childrenOf = new Map();        // parentId -> [child,...]
+  const roots = [];
+  for(const s of list){
+    const p = s.parentSessionId;
+    if(p && inGroup.has(p)) (childrenOf.get(p) || childrenOf.set(p,[]).get(p)).push(s);
+    else roots.push(s);                // 부모가 이 그룹에 없으면 루트로 취급
+  }
+  const byTime = a => a.sort((x,y)=>(y.lastTs||"").localeCompare(x.lastTs||""));
+  byTime(roots);
+  function walk(s, depth){
+    let mark = null;
+    if(s.parentSessionId && !inGroup.has(s.parentSessionId)){
+      const pm = byIdAll.get(s.parentSessionId);
+      mark = "분기 원본: " + (pm ? (pm.aiTitle || pm.uuid.slice(0,8)) : s.parentSessionId.slice(0,8));
+    } else if(depth>0){
+      mark = "부모 세션에서 /branch 로 분기됨";
+    }
+    container.appendChild(sessEl(s, depth, mark));
+    const kids = childrenOf.get(s.uuid);
+    if(kids){ byTime(kids); for(const k of kids) walk(k, depth+1); }
+  }
+  for(const r of roots) walk(r, 0);
+}
+function showList(sessions, title){
+  curListRaw = sessions; curListTitle = title||"";
+  curList = applyDateFilter(sessions).slice().sort((a,b)=>(b.lastTs||"").localeCompare(a.lastTs||""));
+  const box = $("#list");
+  box.innerHTML = "";
+  if(!curList.length){
+    box.innerHTML = dateFilterActive()
+      ? '<div class="empty">이 기간에 세션이 없습니다</div>'
+      : '<div class="empty">세션이 없습니다</div>';
+    return;
+  }
+  const byIdAll = new Map(SESSIONS.map(s=>[s.uuid, s]));   // 분기 원본 탐지용 전역 인덱스
+  // 브랜치별 그룹화 (브랜치명 그대로, 슬래시 위계 유지)
+  const groups = new Map();           // branch -> sessions[]
+  for(const s of curList){
+    const br = s.gitBranch || "(브랜치 없음)";
+    (groups.get(br) || groups.set(br, []).get(br)).push(s);
+  }
+  // 그룹 정렬: 그룹 내 최신 세션 시각 desc
+  const ordered = [...groups.entries()].sort((a,b)=>
+    (b[1][0].lastTs||"").localeCompare(a[1][0].lastTs||""));
+  for(const [br, list] of ordered){
+    const g=document.createElement("div"); g.className="bgroup open";
+    const h=document.createElement("div"); h.className="bhead";
+    h.innerHTML = `<span class="tw">▼</span><span class="bname">🔀 ${esc(br)}</span><span class="bcount">${list.length}</span>`;
+    h.onclick = ()=>{ g.classList.toggle("open");
+      h.querySelector(".tw").textContent = g.classList.contains("open")?"▼":"▶"; };
+    g.appendChild(h);
+    const body=document.createElement("div"); body.className="bbody";
+    renderForest(body, list, byIdAll);   // 그룹 안에서 /branch 분기 위계 들여쓰기
+    g.appendChild(body);
+    box.appendChild(g);
+  }
+}
+
+// ---------- 상세 ----------
+function renderText(t){
+  // 코드펜스 ``` 분리
+  const parts = t.split(/```/g); let html="";
+  parts.forEach((seg,i)=>{
+    if(i%2===1){ const nl=seg.indexOf("\n"); const body=nl>=0?seg.slice(nl+1):seg;
+      html += `<pre><code>${esc(body)}</code></pre>`; }
+    else { html += `<span>${esc(seg).replace(/`([^`]+)`/g,'<code class="inline">$1</code>')}</span>`; }
+  });
+  return html;
+}
+function blockHTML(b){
+  if(b.kind==="text") return `<div class="blk text">${renderText(b.text)}</div>`;
+  if(b.kind==="thinking") return `<details class="think blk"><summary>💭 thinking</summary><div class="blk text">${esc(b.text)}</div></details>`;
+  if(b.kind==="tool_use"){ let inp=""; try{inp=JSON.stringify(b.input,null,2);}catch{inp=String(b.input);}
+    return `<div class="tool blk"><span class="tname">⚙ ${esc(b.name)}</span><pre><code>${esc(inp)}</code></pre></div>`; }
+  if(b.kind==="tool_result"){ const long=b.text.length>800;
+    return `<div class="toolres blk ${b.is_error?'err':''} ${long?'clamped':''}"><pre><code>${esc(b.text)}</code></pre>`+
+      (long?`<span class="more">… 더 보기 (${b.text.length}자)</span>`:"")+`</div>`; }
+  if(b.kind==="image") return `<div class="blk"><em style="color:var(--muted)">[이미지]</em></div>`;
+  return "";
+}
+const SYS_RE = /^<(ide_opened_file|system-reminder|command-name|local-command)/;
+function msgHTML(ev){
+  // Claude Code 의 user role 에는 3종류가 섞여 있다:
+  //  ① 실제 사용자 입력  ② 도구 결과(tool_result)  ③ 하니스 주입(isMeta: 스킬 본문/시스템 컨텍스트)
+  const isToolResult = ev.role==="user" && ev.blocks.length>0
+                       && ev.blocks.every(b=>b.kind==="tool_result");
+  const isMeta = ev.role==="user" && ev.isMeta && !isToolResult;
+  const role = ev.role==="assistant" ? "asst"
+             : isToolResult ? "tool"
+             : isMeta ? "meta" : "user";
+  const blocks = ev.blocks.map(b=>{
+    // 사용자 시스템 주입 텍스트는 접기
+    if(role==="user" && b.kind==="text" && SYS_RE.test(b.text.trim()))
+      return `<details class="sys blk"><summary>시스템 주입 블록</summary><div class="blk text">${esc(b.text)}</div></details>`;
+    return blockHTML(b);
+  }).join("");
+  // 메타(주입) 메시지: 길고 사용자와 무관하므로 기본 접힘
+  if(role==="meta"){
+    const firstTxt = (ev.blocks.find(b=>b.kind==="text")||{}).text || "";
+    const peek = esc(firstTxt.replace(/\s+/g," ").slice(0,70));
+    return `<div class="msg role-meta"><div class="head"><b>📎 주입 컨텍스트</b>`+
+      `<span>${fmtTime(ev.ts)}</span><span class="dim">스킬·시스템</span></div>`+
+      `<details class="sys"><summary>${peek||"주입된 내용"} … (펼치기)</summary>`+
+      `<div class="bubble">${blocks}</div></details></div>`;
+  }
+  const who = role==="asst" ? "🤖 Assistant" : role==="tool" ? "🔧 도구 결과" : "🧑 User";
+  return `<div class="msg role-${role}">`+
+    `<div class="head"><b>${who}</b><span>${fmtTime(ev.ts)}</span>`+
+    (ev.model?`<span>${esc(shortModel(ev.model))}</span>`:"")+
+    (ev.isSidechain?`<span>↳ sidechain</span>`:"")+`</div>`+
+    `<div class="bubble">${blocks}</div></div>`;
+}
+async function openSession(file){
+  curFile = file;
+  document.querySelectorAll(".sess.sel").forEach(s=>s.classList.remove("sel"));
+  const sel=document.querySelector(`.sess[data-file="${CSS.escape(file)}"]`); if(sel) sel.classList.add("sel");
+  const D=$("#detail");
+  D.innerHTML='<div class="spin">불러오는 중…</div>';
+  let data;
+  try{ data=await (await fetch("/api/session?file="+encodeURIComponent(file))).json(); }
+  catch(e){ D.innerHTML='<div class="empty">불러오기 실패</div>'; return; }
+  if(data.error){ D.innerHTML=`<div class="empty">${esc(data.error)}</div>`; return; }
+  const m=data.meta;
+  const ttl=m.aiTitle||m.lastPrompt||m.uuid;
+  D.innerHTML =
+    `<div id="detailBar"><span class="ttl">${esc(ttl)}</span>`+
+    `<span class="srchbox"><input id="inSearch" placeholder="이 세션 내 검색">`+
+    `<span id="inPrev" class="navbtn" title="이전 (Shift+Enter)">‹</span>`+
+    `<span id="inCount"></span>`+
+    `<span id="inNext" class="navbtn" title="다음 (Enter)">›</span></span>`+
+    `<span class="grow" style="flex:1"></span>`+
+    `<span style="color:var(--muted);font-size:11px">${esc(m.cwd||"")}`+
+    ` · ${data.events.length}개 메시지${m.badLines?(" · 깨진줄 "+m.badLines):""}</span></div>`+
+    summaryCard(data)+
+    `<div id="filterFloat">${filterControlHTML()}</div>`+
+    `<div id="detailBody">${data.events.map(msgHTML).join("")||'<div class="empty">표시할 대화가 없습니다</div>'}</div>`;
+  D.scrollTop=0;
+  applyMsgFilter();   // 저장된 표시 필터 적용
+  $("#inSearch").oninput = e=>inSessionSearch(e.target.value);
+  $("#inSearch").addEventListener("keydown", e=>{
+    if(e.key==="Enter"){ e.preventDefault(); gotoMatch(e.shiftKey?-1:1); } });
+  $("#inPrev").onclick=()=>gotoMatch(-1);
+  $("#inNext").onclick=()=>gotoMatch(1);
+  setupFilterPopover();
+  const resumeBtn=$("#resumeBtn");
+  if(resumeBtn) resumeBtn.onclick=()=>resumeSession(m.cwd, m.uuid);
+  const pl=D.querySelector(".plink"); if(pl) pl.onclick=()=>openSession(pl.dataset.pf);
+  // tool_result 더보기/접기 — 전체 텍스트는 이미 렌더돼 있고 CSS 로 높이만 제한
+  D.querySelectorAll(".toolres .more").forEach(el=>{
+    el.onclick=()=>{ const box=el.closest(".toolres");
+      const expanded=box.classList.toggle("expanded");
+      el.textContent = expanded ? "접기 ▲" : "… 더 보기 ▼"; };
+  });
+}
+let searchMarks=[], searchIdx=-1;
+function inSessionSearch(q){
+  const body=$("#detailBody"); const cnt=$("#inCount");
+  body.querySelectorAll("mark").forEach(mk=>{ mk.replaceWith(document.createTextNode(mk.textContent)); });
+  body.normalize();
+  searchMarks=[]; searchIdx=-1;
+  if(!q || q.length<2){ cnt.textContent=""; return; }
+  const re=new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"gi");
+  const walker=document.createTreeWalker(body,NodeFilter.SHOW_TEXT);
+  const targets=[]; let node;
+  while(node=walker.nextNode()){ const pe=node.parentElement;
+    // 접힌 요약(summary)과 메시지 헤더(역할·시각·모델)는 검색 대상에서 제외 —
+    // 전체 검색 건수(서버)와 대상을 맞춰 건수 불일치를 막는다.
+    if(pe.closest("summary")||pe.closest(".head")) continue;
+    if(re.test(node.nodeValue)) targets.push(node); }
+  for(const t of targets){
+    const frag=document.createDocumentFragment(); let last=0; re.lastIndex=0; let mm;
+    while(mm=re.exec(t.nodeValue)){ frag.appendChild(document.createTextNode(t.nodeValue.slice(last,mm.index)));
+      const mk=document.createElement("mark"); mk.textContent=mm[0]; frag.appendChild(mk); last=mm.index+mm[0].length; }
+    frag.appendChild(document.createTextNode(t.nodeValue.slice(last))); t.parentNode.replaceChild(frag,t);
+  }
+  searchMarks=[...body.querySelectorAll("mark")];
+  if(searchMarks.length){ gotoMatch(1); }     // 첫 항목 포커스
+  else { cnt.textContent="0"; }
+}
+function gotoMatch(delta){
+  if(!searchMarks.length){ $("#inCount").textContent="0"; return; }
+  if(searchIdx>=0 && searchMarks[searchIdx]) searchMarks[searchIdx].classList.remove("cur");
+  searchIdx = (searchIdx + delta + searchMarks.length) % searchMarks.length;
+  const mk=searchMarks[searchIdx];
+  mk.classList.add("cur");
+  mk.scrollIntoView({block:"center", behavior:"smooth"});
+  $("#inCount").textContent = `${searchIdx+1} / ${searchMarks.length}`;
+}
+
+// ---------- 세션 내 표시 필터 (체크 = 표시, 기본 전체 표시, localStorage 저장) ----------
+const MSG_TYPES=[
+  {k:"user",     label:"🧑 User"},
+  {k:"asst",     label:"🤖 Assistant"},
+  {k:"tool",     label:"🔧 도구 결과"},
+  {k:"meta",     label:"📎 주입 컨텍스트"},
+  {k:"thinking", label:"💭 thinking"},
+  {k:"tooluse",  label:"⚙ 도구 호출"},
+];
+const ALL_TYPE_KEYS = MSG_TYPES.map(t=>t.k);
+// 표시할 유형 집합. 저장값 없으면 전부 표시(기본). 체크 = 표시.
+function getVisible(){
+  const raw=localStorage.getItem("ccsv-show");
+  if(raw===null) return new Set(ALL_TYPE_KEYS);
+  try{ return new Set(JSON.parse(raw)); }catch{ return new Set(ALL_TYPE_KEYS); }
+}
+function setVisible(s){ localStorage.setItem("ccsv-show", JSON.stringify([...s])); }
+function filterControlHTML(){
+  const vis=getVisible();
+  let h='<span class="filterwrap"><button id="filterBtn" title="표시할 메시지 유형">표시 ▾</button>';
+  h+='<div id="filterPop"><div class="fp-h">표시할 유형 (체크 = 표시)</div>';
+  for(const t of MSG_TYPES)
+    h+=`<label class="fchk"><input type="checkbox" data-k="${t.k}" ${vis.has(t.k)?"checked":""}>`+
+       `<span>${esc(t.label)}</span></label>`;
+  return h+'</div></span>';
+}
+function applyMsgFilter(){
+  const body=$("#detailBody"); if(!body) return;
+  const vis=getVisible();
+  for(const t of MSG_TYPES) body.classList.toggle("hide-"+t.k, !vis.has(t.k));
+}
+function setupFilterPopover(){
+  const btn=$("#filterBtn"), pop=$("#filterPop");
+  if(!btn||!pop) return;
+  btn.onclick=e=>{ e.stopPropagation(); pop.classList.toggle("open"); };
+  pop.querySelectorAll("input[type=checkbox]").forEach(cb=>{
+    cb.onchange=()=>{ const vis=getVisible();
+      cb.checked ? vis.add(cb.dataset.k) : vis.delete(cb.dataset.k);
+      setVisible(vis); applyMsgFilter(); };
+  });
+  document.addEventListener("click", e=>{
+    if(pop.classList.contains("open") && !pop.contains(e.target) && e.target!==btn) pop.classList.remove("open");
+  });
+}
+
+// ---------- 전체 검색 ----------
+async function globalSearch(q){
+  if(!q||q.length<2) return;
+  $("#list").innerHTML='<div class="spin">검색 중…</div>';
+  const data=await (await fetch("/api/search?q="+encodeURIComponent(q))).json();
+  showList(data.results||[], "검색: "+q);
+  if(!(data.results||[]).length) $("#list").innerHTML='<div class="empty">결과 없음</div>';
+}
+
+// ---------- init ----------
+async function init(){
+  const data=await (await fetch("/api/projects")).json();
+  $("#rootPath").textContent=data.root;
+  if(!data.exists){ $("#tree").innerHTML='<div class="empty">세션 폴더 없음</div>'; return; }
+  SESSIONS=data.sessions||[];
+  TREE=buildTree(SESSIONS);           // 전체 구조 1회 구성(노드에 전체 세션 보관)
+  renderTree(true);                   // 기간 필터 반영 + 첫 노드 자동 펼침
+}
+$("#globalSearch").addEventListener("keydown",e=>{ if(e.key==="Enter") globalSearch(e.target.value.trim()); });
+
+// ---------- 설정 드로어 ----------
+function openSettings(){
+  $("#settingsDrawer").classList.add("open");
+  $("#drawerOverlay").classList.add("show");
+  $("#settingsDrawer").setAttribute("aria-hidden","false");
+  loadSettings();
+}
+function closeSettings(){
+  $("#settingsDrawer").classList.remove("open");
+  $("#drawerOverlay").classList.remove("show");
+  $("#settingsDrawer").setAttribute("aria-hidden","true");
+}
+async function loadSettings(){
+  const body=$("#settingsBody"); body.innerHTML='<div class="spin">불러오는 중…</div>';
+  let d; try{ d=await (await fetch("/api/settings")).json(); }
+  catch(e){ body.innerHTML='<div class="empty">불러오기 실패</div>'; return; }
+  $("#settingsPath").textContent=d.path||"";
+  if(!d.exists){ body.innerHTML='<div class="empty">settings.json 이 없습니다</div>'; return; }
+  if(d.error){ body.innerHTML=`<div class="empty">${esc(d.error)}</div>`; return; }
+  // 최상위 boolean 키(일반)만 + effortLevel 만 노출
+  const bools=(d.items||[]).filter(it=>it.type==="bool" && it.path.length===1);
+  const effort=(d.items||[]).find(it=>it.label==="effortLevel");
+  let html='<div class="snote">체크 = 활성(true). 변경은 다음 세션부터 반영될 수 있습니다.</div>';
+  html+='<div class="sgrp"><div class="sgrp-h">일반</div>';
+  for(const it of bools){
+    const id="set_"+it.label.replace(/[^a-zA-Z0-9]/g,"_");
+    html+=`<label class="schk" for="${id}"><input type="checkbox" id="${id}" `+
+      `${it.value?"checked":""} data-path='${esc(JSON.stringify(it.path))}'>`+
+      `<span class="sname">${esc(it.label)}</span>`+
+      (it.absent?`<span class="sabsent">미설정</span>`:"")+`</label>`;
+  }
+  html+='</div>';
+  if(effort){
+    const opts=["low","medium","high","xhigh","max"];
+    html+='<div class="sgrp"><div class="sgrp-h">effortLevel</div><div class="seffort">'+
+      `<select id="effortSel">`+
+      opts.map(o=>`<option value="${o}" ${o===effort.value?"selected":""}>${o}</option>`).join("")+
+      `</select></div></div>`;
+  }
+  html+='<div class="sstatus" id="sStatus"></div>';
+  body.innerHTML=html;
+  body.querySelectorAll('input[type=checkbox]').forEach(cb=>{
+    cb.addEventListener("change", ()=>toggleSetting(cb));
+  });
+  const sel=document.getElementById("effortSel");
+  if(sel) sel.addEventListener("change", ()=>setStringSetting(["effortLevel"], sel.value, sel));
+}
+async function toggleSetting(cb){
+  const path=JSON.parse(cb.dataset.path);
+  const value=cb.checked;
+  cb.disabled=true;
+  let r; try{ r=await (await fetch("/api/settings/set",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path,value})})).json(); }
+  catch(e){ r={ok:false,error:"요청 실패"}; }
+  cb.disabled=false;
+  const st=$("#sStatus");
+  if(r.ok){ cb.checked=value; st.textContent="저장됨 ✓ "+path.join("."); st.className="sstatus ok"; }
+  else { cb.checked=!value; st.textContent="실패: "+(r.error||""); st.className="sstatus err"; }
+  setTimeout(()=>{ if(st) st.textContent=""; }, 2500);
+}
+async function setStringSetting(path, value, el){
+  el.disabled=true;
+  let r; try{ r=await (await fetch("/api/settings/set",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path,value})})).json(); }
+  catch(e){ r={ok:false,error:"요청 실패"}; }
+  el.disabled=false;
+  const st=$("#sStatus");
+  if(r.ok){ st.textContent="저장됨 ✓ "+path.join(".")+" = "+value; st.className="sstatus ok"; }
+  else { st.textContent="실패: "+(r.error||""); st.className="sstatus err"; }
+  setTimeout(()=>{ if(st) st.textContent=""; }, 2500);
+}
+$("#settingsBtn").onclick=openSettings;
+$("#drawerClose").onclick=closeSettings;
+$("#drawerOverlay").onclick=closeSettings;
+document.addEventListener("keydown",e=>{ if(e.key==="Escape") closeSettings(); });
+
+// ---------- 패널 너비 조정 (splitter 드래그 + localStorage 기억) ----------
+function setupSplitters(){
+  for(const sp of document.querySelectorAll(".splitter")){
+    const id = sp.dataset.target;               // "tree" | "list"
+    const pane = document.getElementById(id);
+    const saved = parseInt(localStorage.getItem("ccsv-w-"+id)||"",10);
+    if(saved>=160) pane.style.flexBasis = saved+"px";
+    sp.addEventListener("mousedown", e=>{
+      e.preventDefault();
+      const startX=e.clientX, startW=pane.getBoundingClientRect().width;
+      sp.classList.add("drag"); document.body.classList.add("resizing");
+      const move = ev=>{ pane.style.flexBasis = Math.max(160, Math.min(900, startW+(ev.clientX-startX)))+"px"; };
+      const up = ()=>{
+        sp.classList.remove("drag"); document.body.classList.remove("resizing");
+        localStorage.setItem("ccsv-w-"+id, String(Math.round(pane.getBoundingClientRect().width)));
+        window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up);
+      };
+      window.addEventListener("mousemove",move); window.addEventListener("mouseup",up);
+    });
+    sp.addEventListener("dblclick", ()=>{ pane.style.flexBasis=""; localStorage.removeItem("ccsv-w-"+id); });
+  }
+}
+setupSplitters();
+setupDatePopover();
+init();
+</script>
+</body>
+</html>
