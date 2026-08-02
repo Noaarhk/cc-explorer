@@ -6,6 +6,7 @@
 """
 import json
 import os
+import shutil
 import sys
 import threading
 import webbrowser
@@ -362,10 +363,80 @@ def _safe_session_path(raw):
     return p
 
 
+def touch_sessions(files):
+    """세션 파일들의 mtime 을 현재로 갱신(내용 불변) → Claude Code 자동삭제 시계 리셋."""
+    results = []
+    for raw in files or []:
+        p = _safe_session_path(raw)
+        if not p:
+            results.append({"file": raw, "ok": False, "error": "invalid file"})
+            continue
+        try:
+            os.utime(p, None)  # atime/mtime 을 현재로. 파일 내용은 건드리지 않는다.
+            results.append({"file": raw, "ok": True, "mtime": p.stat().st_mtime})
+        except OSError as e:
+            results.append({"file": raw, "ok": False, "error": str(e)})
+    return {"results": results}
+
+
+def delete_sessions(files):
+    """세션 파일들을 영구 삭제한다. 형제 사이드카(<uuid>/, subagents 기록)도 함께 제거."""
+    results = []
+    for raw in files or []:
+        p = _safe_session_path(raw)
+        if not p:
+            results.append({"file": raw, "ok": False, "error": "invalid file"})
+            continue
+        try:
+            os.remove(p)
+            sidecar = p.with_suffix("")  # .../<uuid>.jsonl → .../<uuid>
+            if sidecar.is_dir():
+                try:
+                    sidecar.relative_to(SESSIONS_ROOT)  # 경로 탈출 방지
+                    shutil.rmtree(sidecar)
+                except ValueError:
+                    pass
+            results.append({"file": raw, "ok": True})
+        except OSError as e:
+            results.append({"file": raw, "ok": False, "error": str(e)})
+    return {"results": results}
+
+
 # ---------- 설정(settings.json) 읽기/쓰기 ----------
-# 파일에 키가 없어도 드로어에 항상 노출할(그리고 생성 허용할) 알려진 최상위 boolean 설정.
-# 예: thinking 기록(showThinkingSummaries) 은 켜기 번거로워 기본 노출한다.
-KNOWN_BOOL_SETTINGS = ["showThinkingSummaries"]
+# cc-explorer 가 의미 있게 쓰는 설정: 파일/키에 없어도 드로어에 기본값으로 항상 노출하고
+# (파일이 없으면 생성해서) 편집을 허용한다.
+#   - cleanupPeriodDays: 세션 자동 삭제 기간(일). 삭제 카운트다운 배지의 기준값. 기본 30.
+#   - showThinkingSummaries: thinking 기록 여부(뷰어가 thinking 블록을 표시). 켜기 번거로워 기본 노출.
+KNOWN_SETTINGS = [
+    {"key": "cleanupPeriodDays", "type": "number", "default": 30},
+    {"key": "showThinkingSummaries", "type": "bool", "default": False},
+]
+
+
+def _known_default_items(present):
+    """파일에 없는 알려진 설정을 기본값 + absent 로 항목화."""
+    out = []
+    for spec in KNOWN_SETTINGS:
+        if (spec["key"],) not in present:
+            out.append({"path": [spec["key"]], "label": spec["key"],
+                        "value": spec["default"], "type": spec["type"], "absent": True})
+    return out
+
+
+def _coerce_int(value):
+    """number 설정 입력을 정수로 강제. 실패 시 None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
 
 
 def _flatten_settings(obj, path=None):
@@ -390,40 +461,52 @@ def _flatten_settings(obj, path=None):
 
 
 def read_settings():
-    if not SETTINGS_FILE.is_file():
-        return {"path": str(SETTINGS_FILE), "exists": False, "items": []}
-    try:
-        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as e:
-        return {"path": str(SETTINGS_FILE), "exists": True,
-                "error": f"파싱 실패: {e}", "items": []}
-    if not isinstance(data, dict):
-        return {"path": str(SETTINGS_FILE), "exists": True,
-                "error": "최상위가 객체가 아님", "items": []}
-    items = _flatten_settings(data)
-    # 알려진 설정이 파일에 없으면 '미설정(false)' 항목으로 추가해 드로어에 항상 노출
+    exists = SETTINGS_FILE.is_file()
+    if exists:
+        try:
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as e:
+            return {"path": str(SETTINGS_FILE), "exists": True,
+                    "error": f"파싱 실패: {e}", "items": []}
+        if not isinstance(data, dict):
+            return {"path": str(SETTINGS_FILE), "exists": True,
+                    "error": "최상위가 객체가 아님", "items": []}
+        items = _flatten_settings(data)
+    else:
+        # 파일이 없어도 알려진 설정은 기본값으로 노출한다(생성 허용).
+        items = []
     present = {tuple(it["path"]) for it in items}
-    for key in KNOWN_BOOL_SETTINGS:
-        if (key,) not in present:
-            items.append({"path": [key], "label": key, "value": False,
-                          "type": "bool", "absent": True})
-    return {"path": str(SETTINGS_FILE), "exists": True, "items": items}
+    items.extend(_known_default_items(present))
+    return {"path": str(SETTINGS_FILE), "exists": exists, "items": items}
 
 
 def set_setting(path_list, value):
-    """파일에 이미 존재하는 leaf 만, 기존과 같은 타입(bool/str)으로 변경.
+    """설정 leaf 를 변경한다.
 
-    .bak 백업 후 다른 키 보존하며 기록한다.
+    - 기존 leaf: 같은 타입(bool/str/number)으로만 변경.
+    - 없는 leaf: 알려진 최상위 설정(KNOWN_SETTINGS)만 타입에 맞게 생성.
+    - 파일이 없어도 알려진 설정이면 새로 만든다. .bak 백업 후 다른 키를 보존하며 기록.
     """
     if not isinstance(path_list, list) or not path_list:
         return {"ok": False, "error": "잘못된 경로"}
-    if not SETTINGS_FILE.is_file():
+    known = None
+    if len(path_list) == 1:
+        known = next((s for s in KNOWN_SETTINGS if s["key"] == path_list[0]), None)
+
+    file_exists = SETTINGS_FILE.is_file()
+    if file_exists:
+        try:
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as e:
+            return {"ok": False, "error": f"읽기 실패: {e}"}
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "최상위가 객체가 아님"}
+    elif known:
+        data = {}
+    else:
         return {"ok": False, "error": "설정 파일 없음"}
-    try:
-        data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as e:
-        return {"ok": False, "error": f"읽기 실패: {e}"}
-    # 경로를 따라가며 leaf 가 존재하는지 확인
+
+    # 경로를 따라가며 leaf 컨테이너 확인
     node = data
     for k in path_list[:-1]:
         if not isinstance(node, dict) or k not in node:
@@ -432,27 +515,47 @@ def set_setting(path_list, value):
     leaf = path_list[-1]
     if not isinstance(node, dict):
         return {"ok": False, "error": "존재하지 않는 키"}
+
     if leaf in node:
         existing = node[leaf]
-        # 기존 타입과 동일한 타입만 허용 (bool→bool, str→str)
         if isinstance(existing, bool):
             if not isinstance(value, bool):
                 return {"ok": False, "error": "boolean 값이어야 함"}
         elif isinstance(existing, str):
             if not isinstance(value, str):
                 return {"ok": False, "error": "문자열 값이어야 함"}
+        elif isinstance(existing, (int, float)):
+            v = _coerce_int(value)
+            if v is None:
+                return {"ok": False, "error": "정수 값이어야 함"}
+            value = v
         else:
             return {"ok": False, "error": "편집 불가 타입"}
     else:
-        # 없는 키: 알려진 최상위 boolean 설정 + bool 값일 때만 생성 허용
-        if not (path_list == [leaf] and leaf in KNOWN_BOOL_SETTINGS
-                and isinstance(value, bool)):
+        # 없는 키: 알려진 설정만 타입에 맞게 생성 허용
+        if not known:
             return {"ok": False, "error": "존재하지 않는 키"}
+        if known["type"] == "bool":
+            if not isinstance(value, bool):
+                return {"ok": False, "error": "boolean 값이어야 함"}
+        elif known["type"] == "number":
+            v = _coerce_int(value)
+            if v is None:
+                return {"ok": False, "error": "정수 값이어야 함"}
+            value = v
+
+    # cleanupPeriodDays 범위 검증(1 이상)
+    if path_list == ["cleanupPeriodDays"] and (not isinstance(value, int) or value < 1):
+        return {"ok": False, "error": "1 이상의 정수여야 함"}
+
     node[leaf] = value
     try:
-        # 쓰기 직전 백업 1부
-        SETTINGS_FILE.with_suffix(".json.bak").write_text(
-            SETTINGS_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        if file_exists:
+            # 쓰기 직전 백업 1부
+            SETTINGS_FILE.with_suffix(".json.bak").write_text(
+                SETTINGS_FILE.read_text(encoding="utf-8"), encoding="utf-8")
+        else:
+            SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(
             json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     except OSError as e:
@@ -511,18 +614,25 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": str(e)}, 500)
 
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b"{}"
+        return json.loads(raw.decode("utf-8"))
+
     def do_POST(self):
         u = urlparse(self.path)
         try:
+            try:
+                body = self._read_json_body()
+            except ValueError:
+                return self._send_json({"ok": False, "error": "잘못된 JSON"}, 400)
             if u.path == "/api/settings/set":
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length else b"{}"
-                try:
-                    body = json.loads(raw.decode("utf-8"))
-                except ValueError:
-                    return self._send_json({"ok": False, "error": "잘못된 JSON"}, 400)
                 res = set_setting(body.get("path"), body.get("value"))
                 return self._send_json(res, 200 if res.get("ok") else 400)
+            if u.path == "/api/touch":
+                return self._send_json(touch_sessions(body.get("files")))
+            if u.path == "/api/delete":
+                return self._send_json(delete_sessions(body.get("files")))
             self.send_error(404)
         except BrokenPipeError:
             pass

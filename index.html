@@ -153,6 +153,56 @@
   .minibtn:hover { border-color:var(--accent); }
   .minibtn.resume { color:var(--accent); border-color:#4a4130; }
   .minibtn.resume:hover { background:#33363c; border-color:var(--accent); }
+  .minibtn.danger { color:#e88; border-color:#5a3030; }
+  .minibtn.danger:hover { background:#3a2727; border-color:#e88; }
+  .minibtn:disabled { opacity:.4; cursor:default; }
+  .minibtn:disabled:hover { border-color:var(--line); background:var(--bg3); }
+  /* 삭제 카운트다운 배지 */
+  .badge.del { background:transparent; border:1px solid var(--line); color:var(--muted); }
+  .badge.del.warn { color:#e0b877; border-color:#5a4a2a; }
+  .badge.del.crit { color:#e88; border-color:#5a3030; }
+  /* 목록 상단 선택 툴바 */
+  .ltoolbar { display:flex; align-items:center; gap:8px; padding:7px 12px; border-bottom:1px solid var(--line);
+              position:sticky; top:0; background:var(--bg); z-index:6; }
+  .ltoolbar.sel { background:var(--bg2); }
+  .ltoolbar .selall { display:flex; align-items:center; gap:5px; cursor:pointer; font-size:12px; flex:0 0 auto; white-space:nowrap; }
+  .ltoolbar .selall input { width:14px; height:14px; cursor:pointer; }
+  .ltoolbar .selcount { color:var(--muted); font-size:12px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ltoolbar .minibtn { margin-left:0; flex:0 0 auto; white-space:nowrap; }
+  /* 카드 내 체크박스 / 연장 버튼 */
+  .sess .selchk { width:14px; height:14px; margin-right:7px; vertical-align:-2px; cursor:pointer; }
+  .sess .retention { display:flex; align-items:center; gap:10px; margin-top:5px; font-size:11px; }
+  .sess .extendbtn { background:var(--bg3); border:1px solid var(--line); color:var(--muted);
+                     border-radius:5px; padding:0 6px; cursor:pointer; font-size:11px; }
+  .sess .extendbtn:hover { border-color:var(--accent); color:var(--accent); }
+  /* 삭제 확인 모달 */
+  .dm-ov { position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:60; display:flex;
+           align-items:center; justify-content:center; }
+  .dm-box { background:var(--bg2); border:1px solid var(--line); border-radius:10px; width:520px; max-width:92vw;
+            max-height:82vh; display:flex; flex-direction:column; padding:18px 18px 14px; }
+  .dm-h { font-size:15px; font-weight:600; color:#e88; margin-bottom:6px; }
+  .dm-note { font-size:12.5px; color:var(--muted); line-height:1.55; margin-bottom:10px; }
+  .dm-list { overflow:auto; border:1px solid var(--line); border-radius:6px; margin-bottom:12px; }
+  .dm-list table { width:100%; border-collapse:collapse; font-size:12px; }
+  .dm-list td { padding:5px 8px; border-bottom:1px solid var(--line); }
+  .dm-list tr:last-child td { border-bottom:none; }
+  .dm-list .dm-t { color:var(--fg); max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dm-list .dm-d { color:var(--muted); white-space:nowrap; }
+  .dm-list .dm-x { color:var(--muted); text-align:right; white-space:nowrap; }
+  .dm-btns { display:flex; justify-content:flex-end; gap:8px; }
+  /* 설정 number 입력 */
+  .snum { display:flex; align-items:center; gap:8px; padding:5px 4px; }
+  .snum label { font-size:13px; }
+  .snum input { width:90px; background:var(--bg); border:1px solid var(--line); color:var(--fg);
+                border-radius:5px; padding:3px 7px; font-size:13px; }
+  .snum .unit { color:var(--muted); font-size:12px; }
+  .snum-view b { color:var(--accent); font-weight:600; font-size:14px; }
+  .snum-input, .snum-eunit, .snum-save, .snum-cancel { display:none; }
+  .snum-edit { margin-left:auto; }
+  .snum.editing .snum-view, .snum.editing .snum-edit { display:none; }
+  .snum.editing .snum-input, .snum.editing .snum-eunit { display:inline-block; }
+  .snum.editing .snum-save { display:inline-block; margin-left:auto; }
+  .snum.editing .snum-cancel { display:inline-block; }
   #toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px);
            background:var(--bg3); border:1px solid var(--line); color:var(--fg); border-radius:8px;
            padding:9px 16px; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,.5); z-index:60;
@@ -240,6 +290,32 @@ let SESSIONS = [];          // 전체 메타
 let curList = [];           // 현재 목록(필터·정렬 적용본)
 let curListRaw = [];        // 목록 원본(트리 선택 또는 검색 결과) — 필터 재적용용
 let curListTitle = "";
+let cleanupDays = 30;       // settings.cleanupPeriodDays (없으면 30) — 삭제 카운트다운 기준
+let selectMode = false;     // 목록 선택 모드
+const selected = new Set(); // 선택된 세션 file 경로
+
+// ---------- 삭제 카운트다운 ----------
+const DAY_MS = 86400000;
+// mtime(초) 기준 삭제까지 남은 일수. 없으면 null.
+function daysLeft(s){
+  if(!s || !s.mtime) return null;
+  const deleteAt = s.mtime*1000 + cleanupDays*DAY_MS;
+  return Math.ceil((deleteAt - Date.now())/DAY_MS);
+}
+function delBadge(s){
+  const n=daysLeft(s);
+  if(n===null) return "";
+  const cls = n<=3 ? "del crit" : n<=7 ? "del warn" : "del";
+  const label = n<=0 ? "삭제 임박" : "삭제 D-"+n;
+  return `<span class="badge ${cls}" title="마지막 활동(mtime) 후 ${cleanupDays}일에 Claude Code 가 자동 삭제">${label}</span>`;
+}
+async function loadCleanupDays(){
+  try{
+    const d=await (await fetch("/api/settings")).json();
+    const it=(d.items||[]).find(x=>x.label==="cleanupPeriodDays");
+    if(it && typeof it.value==="number") cleanupDays=it.value;
+  }catch(e){/* 기본 30 유지 */}
+}
 let curFile = null;
 
 // ---------- 날짜(기간) 필터 — 마지막 활동(lastTs) 기준, 목록에만 적용, localStorage 저장 ----------
@@ -372,8 +448,16 @@ function summaryCard(data){
   rows.push(`<div class="srow"><span class="sk">세션ID</span><span class="sv">`+
     `<code class="sid">${esc(m.uuid)}</code>`+
     `<button class="minibtn resume" id="resumeBtn" title="resume 명령을 클립보드에 복사">▶ resume</button>`+
+    `<button class="minibtn extend" id="extendBtn" title="삭제 시계를 지금 기준 ${cleanupDays}일로 리셋">⏱ 연장</button>`+
     `</span></div>`);
   rows.push(`<div class="srow"><span class="sk">기간</span><span class="sv">${fmtTime(s.firstTs||m.firstTs)} ~ ${fmtTime(s.lastTs||m.lastTs)} <span class="dim">(${fmtDur(s.firstTs,s.lastTs)})</span></span></div>`);
+  const dl=daysLeft(m);
+  if(dl!==null){
+    const cls = dl<=3 ? "del crit" : dl<=7 ? "del warn" : "del";
+    rows.push(`<div class="srow"><span class="sk">보관</span><span class="sv">`+
+      `<span class="badge ${cls}">${dl<=0?"삭제 임박":"삭제 D-"+dl}</span> `+
+      `<span class="dim">마지막 활동 후 ${cleanupDays}일에 자동 삭제</span></span></div>`);
+  }
   rows.push(`<div class="srow"><span class="sk">메시지</span><span class="sv">user ${s.user||0} · assistant ${s.assistant||0} <span class="dim">· ${fmtSize(m.size)}</span></span></div>`);
   rows.push(`<div class="srow"><span class="sk">토큰</span><span class="sv">출력 <b>${fmtNum(tok.output)}</b> · 입력 ${fmtNum(tok.input)} · 캐시읽기 ${fmtNum(tok.cacheRead)} · 캐시생성 ${fmtNum(tok.cacheCreate)}</span></div>`);
   if((m.models||[]).length) rows.push(`<div class="srow"><span class="sk">모델</span><span class="sv">${esc((m.models||[]).map(shortModel).join(", "))}</span></div>`);
@@ -439,6 +523,7 @@ function renderNode(node, depth, pred){
       row.querySelector(".tw").textContent = el.classList.contains("open")?"▼":"▶"; }
     // 이 노드(하위 포함)의 모든 세션(필터 전) — showList 가 현재 기간 필터를 적용
     const all=[]; (function collect(n){ all.push(...n.sessions); for(const k in n.children) collect(n.children[k]); })(cur);
+    clearSearchMarks();   // 이전 검색의 hits/snippet 이 폴더 목록에 남지 않게
     showList(all, label);
   };
   return el;
@@ -479,14 +564,22 @@ function sessEl(s, depth=0, forkMark=null){
   const ttl = s.aiTitle || s.lastPrompt || s.uuid;
   const models = (s.models||[]).map(shortModel).join(", ");
   const fork = forkMark ? `<span class="forktag" title="${esc(forkMark)}">⑂ 분기</span> ` : "";
-  d.innerHTML = `<div class="t">${fork}${esc(ttl)}</div>`+
+  const chk = selectMode ? `<input type="checkbox" class="selchk" ${selected.has(s.file)?"checked":""}>` : "";
+  d.innerHTML = `<div class="t">${chk}${fork}${esc(ttl)}</div>`+
     (s.lastPrompt && s.aiTitle?`<div class="sub">${esc(s.lastPrompt)}</div>`:"")+
     `<div class="meta"><span>${fmtTime(s.lastTs)}</span>`+
     `<span class="badge">${s.msgCount}msg</span>`+
     (models?`<span class="badge">${esc(models)}</span>`:"")+
     (s.hits?`<span class="hits">검색 ${s.hits}건</span>`:"")+
+    `</div>`+
+    `<div class="retention">`+ delBadge(s)+
+      `<button class="extendbtn" title="삭제 시계를 지금 기준 ${cleanupDays}일로 리셋">⏱ 연장</button>`+
     `</div>`+ (s.snippet?`<div class="sub">${esc(s.snippet)}</div>`:"");
   d.onclick = ()=>openSession(s.file);
+  const cb=d.querySelector(".selchk");
+  if(cb) cb.onclick=(e)=>{ e.stopPropagation(); toggleSelect(s.file, cb.checked); };
+  const ext=d.querySelector(".extendbtn");
+  if(ext) ext.onclick=(e)=>{ e.stopPropagation(); extendSessions([s.file]); };
   return d;
 }
 // 분기(/branch) 위계를 부모 밑 들여쓰기로 렌더. byIdAll = 전체 세션 인덱스(부모가 다른 그룹/폴더여도 탐지)
@@ -526,6 +619,7 @@ function showList(sessions, title){
       : '<div class="empty">세션이 없습니다</div>';
     return;
   }
+  box.insertAdjacentHTML("beforeend", listToolbar());
   const byIdAll = new Map(SESSIONS.map(s=>[s.uuid, s]));   // 분기 원본 탐지용 전역 인덱스
   // 브랜치별 그룹화 (브랜치명 그대로, 슬래시 위계 유지)
   const groups = new Map();           // branch -> sessions[]
@@ -548,6 +642,109 @@ function showList(sessions, title){
     g.appendChild(body);
     box.appendChild(g);
   }
+  wireToolbar();
+}
+
+// ---------- 선택 모드 · 연장 · 일괄 삭제 ----------
+function listToolbar(){
+  if(!selectMode){
+    return `<div class="ltoolbar"><button id="selModeBtn" class="minibtn">☑ 선택</button>`+
+      `<span class="selcount">삭제 임박 세션을 연장하거나 정리하려면 선택하세요</span></div>`;
+  }
+  const total=curList.length;
+  const allSel = total>0 && curList.every(s=>selected.has(s.file));
+  const n=selected.size;
+  return `<div class="ltoolbar sel">`+
+    `<label class="selall"><input type="checkbox" id="selAll" ${allSel?"checked":""}><span>전체선택</span></label>`+
+    `<span class="selcount">${n}개 선택</span>`+
+    `<span class="grow" style="flex:1"></span>`+
+    `<button id="selExtend" class="minibtn" ${n?"":"disabled"}>⏱ 연장</button>`+
+    `<button id="selDelete" class="minibtn danger" ${n?"":"disabled"}>🗑 삭제</button>`+
+    `<button id="selCancel" class="minibtn">취소</button>`+
+    `</div>`;
+}
+function wireToolbar(){
+  const b=$("#selModeBtn"); if(b) b.onclick=()=>{ selectMode=true; rerenderList(); };
+  const c=$("#selCancel"); if(c) c.onclick=()=>{ selectMode=false; selected.clear(); rerenderList(); };
+  const a=$("#selAll"); if(a) a.onclick=()=>{
+    if(a.checked) curList.forEach(s=>selected.add(s.file));
+    else curList.forEach(s=>selected.delete(s.file));
+    rerenderList();
+  };
+  const e=$("#selExtend"); if(e) e.onclick=()=>extendSessions([...selected]);
+  const del=$("#selDelete"); if(del) del.onclick=()=>confirmDelete([...selected]);
+}
+function toggleSelect(file, on){
+  if(on) selected.add(file); else selected.delete(file);
+  updateSelUI();
+}
+function updateSelUI(){   // 체크박스 1개 토글 시 전체 재렌더 없이 툴바만 갱신
+  const n=selected.size;
+  const c=document.querySelector(".ltoolbar .selcount"); if(c) c.textContent=n+"개 선택";
+  const e=$("#selExtend"); if(e) e.disabled=!n;
+  const del=$("#selDelete"); if(del) del.disabled=!n;
+  const a=$("#selAll"); if(a) a.checked = curList.length>0 && curList.every(s=>selected.has(s.file));
+}
+async function extendSessions(files){
+  files=(files||[]).filter(Boolean);
+  if(!files.length) return;
+  let r; try{ r=await (await fetch("/api/touch",{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({files})})).json(); }
+  catch(e){ toast("연장 실패", true); return; }
+  const okMap=new Map((r.results||[]).filter(x=>x.ok).map(x=>[x.file,x.mtime]));
+  for(const s of SESSIONS){ if(okMap.has(s.file)) s.mtime=okMap.get(s.file); }   // 로컬 mtime 갱신
+  for(const s of curListRaw){ if(okMap.has(s.file)) s.mtime=okMap.get(s.file); } // 목록이 SESSIONS 밖 객체(검색 결과 등)여도 갱신
+  const okN=okMap.size, failN=(r.results||[]).length-okN;
+  toast(okN?`연장 완료: ${okN}개 · 삭제 D-${cleanupDays}${failN?` · 실패 ${failN}`:""}`
+           :`연장 실패${failN?`: ${failN}개`:""}`, failN>0);
+  rerenderList();                                        // 배지(D-N) 재계산
+  if(curFile && okMap.has(curFile)) openSession(curFile); // 열려있던 세션 헤더 배지 갱신
+}
+function confirmDelete(files){
+  files=(files||[]).filter(Boolean);
+  if(!files.length) return;
+  const items=files.map(f=>SESSIONS.find(s=>s.file===f)).filter(Boolean);
+  const rows=items.map(s=>{
+    const n=daysLeft(s);
+    const ttl=s.aiTitle||s.lastPrompt||s.uuid;
+    return `<tr><td class="dm-t" title="${esc(ttl)}">${esc(ttl)}</td>`+
+      `<td class="dm-d">${fmtTime(s.lastTs)}</td>`+
+      `<td class="dm-x">${n===null?"":(n<=0?"삭제 임박":"D-"+n)}</td></tr>`;
+  }).join("");
+  const html=`<div class="dm-box">`+
+    `<div class="dm-h">⚠ 세션 ${items.length}개를 영구 삭제할까요?</div>`+
+    `<div class="dm-note">파일이 <b>즉시 삭제</b>되며 복구할 수 없습니다. Claude Code 에서 이 세션들을 다시 열 수 없게 됩니다.</div>`+
+    `<div class="dm-list"><table>${rows}</table></div>`+
+    `<div class="dm-btns"><button id="dmCancel" class="minibtn">취소</button>`+
+    `<button id="dmOk" class="minibtn danger">영구 삭제</button></div></div>`;
+  const ov=document.createElement("div"); ov.className="dm-ov"; ov.innerHTML=html;
+  document.body.appendChild(ov);
+  const close=()=>ov.remove();
+  ov.onclick=(e)=>{ if(e.target===ov) close(); };
+  ov.querySelector("#dmCancel").onclick=close;
+  ov.querySelector("#dmOk").onclick=async ()=>{
+    ov.querySelector("#dmOk").disabled=true;
+    ov.querySelector("#dmCancel").disabled=true;
+    await doDelete(files);
+    close();
+  };
+}
+async function doDelete(files){
+  let r; try{ r=await (await fetch("/api/delete",{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({files})})).json(); }
+  catch(e){ toast("삭제 실패", true); return; }
+  const okFiles=new Set((r.results||[]).filter(x=>x.ok).map(x=>x.file));
+  const okN=okFiles.size, failN=(r.results||[]).length-okN;
+  SESSIONS=SESSIONS.filter(s=>!okFiles.has(s.file));
+  curListRaw=curListRaw.filter(s=>!okFiles.has(s.file));
+  okFiles.forEach(f=>selected.delete(f));
+  if(curFile && okFiles.has(curFile)){
+    curFile=null; $("#detail").innerHTML='<div class="empty">세션을 선택하세요</div>';
+  }
+  TREE=buildTree(SESSIONS);   // 트리 노드 카운트 갱신
+  renderTree(false);
+  rerenderList();
+  toast(`삭제 완료: ${okN}개${failN?` · 실패 ${failN}`:""}`, failN>0);
 }
 
 // ---------- 상세 ----------
@@ -638,6 +835,8 @@ async function openSession(file){
   setupFilterPopover();
   const resumeBtn=$("#resumeBtn");
   if(resumeBtn) resumeBtn.onclick=()=>resumeSession(m.cwd, m.uuid);
+  const extendBtn=$("#extendBtn");
+  if(extendBtn) extendBtn.onclick=()=>extendSessions([m.file]);
   const pl=D.querySelector(".plink"); if(pl) pl.onclick=()=>openSession(pl.dataset.pf);
   // tool_result 더보기/접기 — 전체 텍스트는 이미 렌더돼 있고 CSS 로 높이만 제한
   D.querySelectorAll(".toolres .more").forEach(el=>{
@@ -727,12 +926,21 @@ function setupFilterPopover(){
 }
 
 // ---------- 전체 검색 ----------
+function clearSearchMarks(){ for(const s of SESSIONS){ delete s.hits; delete s.snippet; } }
 async function globalSearch(q){
   if(!q||q.length<2) return;
   $("#list").innerHTML='<div class="spin">검색 중…</div>';
   const data=await (await fetch("/api/search?q="+encodeURIComponent(q))).json();
-  showList(data.results||[], "검색: "+q);
-  if(!(data.results||[]).length) $("#list").innerHTML='<div class="empty">결과 없음</div>';
+  // 검색 결과를 SESSIONS 의 기존 객체에 병합(객체 단일화) — 연장 등 상태 변경이 검색 목록에도 즉시 반영되게
+  clearSearchMarks();
+  const byFile=new Map(SESSIONS.map(s=>[s.file,s]));
+  const results=(data.results||[]).map(r=>{
+    const s=byFile.get(r.file);
+    if(!s) return r;          // init 이후 새로 생긴 세션이면 서버 객체 그대로 사용
+    return Object.assign(s, r);
+  });
+  showList(results, "검색: "+q);
+  if(!results.length) $("#list").innerHTML='<div class="empty">결과 없음</div>';
 }
 
 // ---------- init ----------
@@ -741,6 +949,7 @@ async function init(){
   $("#rootPath").textContent=data.root;
   if(!data.exists){ $("#tree").innerHTML='<div class="empty">세션 폴더 없음</div>'; return; }
   SESSIONS=data.sessions||[];
+  await loadCleanupDays();            // 삭제 카운트다운 기준값(cleanupPeriodDays) 로드
   TREE=buildTree(SESSIONS);           // 전체 구조 1회 구성(노드에 전체 세션 보관)
   renderTree(true);                   // 기간 필터 반영 + 첫 노드 자동 펼침
 }
@@ -763,19 +972,33 @@ async function loadSettings(){
   let d; try{ d=await (await fetch("/api/settings")).json(); }
   catch(e){ body.innerHTML='<div class="empty">불러오기 실패</div>'; return; }
   $("#settingsPath").textContent=d.path||"";
-  if(!d.exists){ body.innerHTML='<div class="empty">settings.json 이 없습니다</div>'; return; }
   if(d.error){ body.innerHTML=`<div class="empty">${esc(d.error)}</div>`; return; }
-  // 최상위 boolean 키(일반)만 + effortLevel 만 노출
+  // cc-explorer 가 쓰는 설정은 파일/키가 없어도 기본값으로 노출된다(서버가 채워줌).
   const bools=(d.items||[]).filter(it=>it.type==="bool" && it.path.length===1);
+  const numbers=(d.items||[]).filter(it=>it.type==="number" && it.path.length===1);
   const effort=(d.items||[]).find(it=>it.label==="effortLevel");
-  let html='<div class="snote">체크 = 활성(true). 변경은 다음 세션부터 반영될 수 있습니다.</div>';
-  html+='<div class="sgrp"><div class="sgrp-h">일반</div>';
+  let html='<div class="snote">'+(d.exists?"":"settings.json 이 아직 없습니다 — 값을 바꾸면 새로 만듭니다. ")+
+    '변경은 다음 세션부터 반영될 수 있습니다. <span class="sabsent">기본값</span> = 파일에 없어 기본값 표시 중.</div>';
+  for(const it of numbers){
+    const unit = it.label==="cleanupPeriodDays" ? "일" : "";
+    const v = esc(String(it.value));
+    html+=`<div class="snum" data-path='${esc(JSON.stringify(it.path))}'>`+
+      `<label>${esc(it.label)}</label>`+
+      `<span class="snum-view"><b class="snum-val">${v}</b>${unit?` <span class="unit">${unit}</span>`:""}</span>`+
+      `<input type="number" class="snum-input" min="1" step="1" value="${v}">`+
+      (unit?`<span class="unit snum-eunit">${unit}</span>`:"")+
+      `<button class="minibtn snum-edit">수정하기</button>`+
+      `<button class="minibtn snum-save">저장</button>`+
+      `<button class="minibtn snum-cancel">취소</button>`+
+      `</div>`;
+  }
+  html+='<div class="sgrp"><div class="sgrp-h">일반 (체크 = 활성)</div>';
   for(const it of bools){
     const id="set_"+it.label.replace(/[^a-zA-Z0-9]/g,"_");
     html+=`<label class="schk" for="${id}"><input type="checkbox" id="${id}" `+
       `${it.value?"checked":""} data-path='${esc(JSON.stringify(it.path))}'>`+
       `<span class="sname">${esc(it.label)}</span>`+
-      (it.absent?`<span class="sabsent">미설정</span>`:"")+`</label>`;
+      (it.absent?`<span class="sabsent">기본값</span>`:"")+`</label>`;
   }
   html+='</div>';
   if(effort){
@@ -790,8 +1013,37 @@ async function loadSettings(){
   body.querySelectorAll('input[type=checkbox]').forEach(cb=>{
     cb.addEventListener("change", ()=>toggleSetting(cb));
   });
+  body.querySelectorAll('.snum').forEach(row=>{
+    const inp=row.querySelector(".snum-input");
+    const val=row.querySelector(".snum-val");
+    const path=JSON.parse(row.dataset.path);
+    row.querySelector(".snum-edit").onclick=()=>{ row.classList.add("editing"); inp.value=val.textContent; inp.focus(); inp.select(); };
+    row.querySelector(".snum-cancel").onclick=()=>{ row.classList.remove("editing"); };
+    row.querySelector(".snum-save").onclick=()=>saveNumberSetting(path, inp, row, val);
+    inp.addEventListener("keydown", e=>{ if(e.key==="Enter") saveNumberSetting(path, inp, row, val);
+                                         else if(e.key==="Escape") row.classList.remove("editing"); });
+  });
   const sel=document.getElementById("effortSel");
   if(sel) sel.addEventListener("change", ()=>setStringSetting(["effortLevel"], sel.value, sel));
+}
+async function saveNumberSetting(path, inp, row, valEl){
+  const value=parseInt(inp.value,10);
+  const st=$("#sStatus");
+  if(isNaN(value)){ st.textContent="숫자를 입력하세요"; st.className="sstatus err"; return; }
+  inp.disabled=true;
+  let r; try{ r=await (await fetch("/api/settings/set",{method:"POST",
+    headers:{"Content-Type":"application/json"}, body:JSON.stringify({path,value})})).json(); }
+  catch(e){ r={ok:false,error:"요청 실패"}; }
+  inp.disabled=false;
+  if(r.ok){
+    valEl.textContent=r.value;
+    row.classList.remove("editing");
+    st.textContent="저장됨 ✓ "+path.join(".")+" = "+r.value; st.className="sstatus ok";
+    if(path.length===1 && path[0]==="cleanupPeriodDays"){ cleanupDays=r.value; rerenderList(); }
+  } else {
+    st.textContent="실패: "+(r.error||""); st.className="sstatus err";
+  }
+  setTimeout(()=>{ if(st) st.textContent=""; }, 2500);
 }
 async function toggleSetting(cb){
   const path=JSON.parse(cb.dataset.path);
